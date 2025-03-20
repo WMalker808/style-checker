@@ -85,39 +85,26 @@ def extract_meaningful_text(html_content):
 
 def normalize_text(text):
     """
-    Enhanced text normalization to handle very subtle spacing differences
-    and focus only on meaningful content changes.
+    Final ultra-aggressive text normalization to eliminate ALL spacing and minor differences.
     """
     if not text:
         return ""
     
-    # Convert to lowercase for case-insensitive comparison
+    # Convert to lowercase
     text = text.lower()
     
-    # Replace multiple spaces, tabs, newlines with a single space
-    text = re.sub(r'\s+', ' ', text)
+    # Remove ALL punctuation (commas, periods, etc.)
+    text = re.sub(r'[^\w\s]', '', text)
     
-    # Remove all spaces between word and punctuation
-    text = re.sub(r'(\w)\s+([,.;:!?])', r'\1\2', text)
-    
-    # Remove spaces after punctuation
-    text = re.sub(r'([,.;:!?])\s+', r'\1', text)
-    
-    # Completely remove commas for comparison (often cause false differences)
-    text = text.replace(',', '')
-    
-    # Remove periods as well (often differ between versions)
-    text = text.replace('.', '')
-    
-    # Trim leading/trailing whitespace
-    text = text.strip()
+    # Remove ALL whitespace (will compare just the sequence of characters)
+    text = re.sub(r'\s+', '', text)
     
     return text
 
 def find_significant_changes(old_items, new_items, similarity_threshold=0.7):
     """
-    Compare two lists of content items and identify significant additions, removals, and modifications.
-    Now with much more aggressive filtering of minor formatting differences.
+    Ultimate strict comparison that completely ignores spacing and minor differences
+    to focus exclusively on substantial content changes.
     """
     results = {
         'added': [],
@@ -125,91 +112,101 @@ def find_significant_changes(old_items, new_items, similarity_threshold=0.7):
         'modified': []
     }
     
-    # Find added and modified content
-    for new_tag, new_text in new_items:
-        best_match = None
-        best_similarity = 0
-        
-        # Check for substantive changes only
-        aggressively_normalized_new = normalize_text(new_text)
-        
-        # Skip very short content - likely to cause false positives
-        if len(aggressively_normalized_new) < 20:
-            continue
-            
-        for old_tag, old_text in old_items:
-            aggressively_normalized_old = normalize_text(old_text)
-            
-            # If the aggressive normalization makes them very similar, ignore minor changes
-            normalized_similarity = difflib.SequenceMatcher(None, 
-                                                      aggressively_normalized_new, 
-                                                      aggressively_normalized_old).ratio()
-            
-            # For spacing issues, use an extremely high threshold (99%)
-            if normalized_similarity > 0.99:
-                # These are essentially the same text with minor spacing/punctuation differences
-                best_similarity = 1.0
-                best_match = (old_tag, old_text)
-                break
-            
-            # Calculate standard similarity for regular content changes
-            standard_similarity = difflib.SequenceMatcher(None, new_text.lower(), old_text.lower()).ratio()
-            
-            if standard_similarity > best_similarity:
-                best_similarity = standard_similarity
-                best_match = (old_tag, old_text)
-        
-        # Only consider as new content if nothing similar exists
-        if best_similarity < similarity_threshold:
-            results['added'].append(f"<strong>{new_tag.upper()}</strong>: {new_text[:150]}..." if len(new_text) > 150 else f"<strong>{new_tag.upper()}</strong>: {new_text}")
-        
-        # For modified content, check if the changes are substantial (not just spacing/formatting)
-        elif best_similarity < 0.95:
-            # Check if normalized versions are still significantly different            
-            # Split into words and compare word count 
-            new_words = set(re.findall(r'\b\w+\b', new_text.lower()))
-            old_words = set(re.findall(r'\b\w+\b', best_match[1].lower()))
-            
-            # Find words that are unique to each version
-            added_words = new_words - old_words
-            removed_words = old_words - new_words
-            
-            # Only count as modified if there are actual word differences (not just formatting)
-            if len(added_words) > 1 or len(removed_words) > 1 or len(new_words) != len(old_words):
-                # Calculate length difference to detect substantial additions/removals
-                length_diff = abs(len(new_text) - len(best_match[1]))
-                
-                # If length difference is substantial (>20 characters) or different words found
-                if length_diff > 20 or len(added_words) > 1 or len(removed_words) > 1:
-                    results['modified'].append({
-                        'old': f"<strong>{best_match[0].upper()}</strong>: {best_match[1][:150]}..." if len(best_match[1]) > 150 else f"<strong>{best_match[0].upper()}</strong>: {best_match[1]}",
-                        'new': f"<strong>{new_tag.upper()}</strong>: {new_text[:150]}..." if len(new_text) > 150 else f"<strong>{new_tag.upper()}</strong>: {new_text}"
-                    })
-    
-    # Find removed content
+    # Process items to create lookup maps for quick comparison
+    old_normalized_map = {}
     for old_tag, old_text in old_items:
-        best_similarity = 0
-        aggressively_normalized_old = normalize_text(old_text)
-        
-        # Skip very short content
-        if len(aggressively_normalized_old) < 20:
+        ultra_normalized = normalize_text(old_text)
+        # Skip very short content - likely to cause false positives
+        if len(ultra_normalized) < 30:
             continue
+        # Store with normalized text as key for quick lookup
+        if ultra_normalized not in old_normalized_map:
+            old_normalized_map[ultra_normalized] = []
+        old_normalized_map[ultra_normalized].append((old_tag, old_text))
+    
+    new_normalized_map = {}
+    for new_tag, new_text in new_items:
+        ultra_normalized = normalize_text(new_text)
+        # Skip very short content
+        if len(ultra_normalized) < 30:
+            continue
+        # Store for quick lookup
+        if ultra_normalized not in new_normalized_map:
+            new_normalized_map[ultra_normalized] = []
+        new_normalized_map[ultra_normalized].append((new_tag, new_text))
+    
+    # Find added content (present in new but not in old)
+    for normalized_text, items in new_normalized_map.items():
+        # If this normalized text doesn't exist in old version, it's new content
+        if normalized_text not in old_normalized_map:
+            # Only consider substantial additions (longer content)
+            if len(normalized_text) > 50:  # Increased threshold for significance
+                for new_tag, new_text in items:
+                    results['added'].append(f"<strong>{new_tag.upper()}</strong>: {new_text[:150]}..." if len(new_text) > 150 else f"<strong>{new_tag.upper()}</strong>: {new_text}")
+    
+    # Find removed content (present in old but not in new)
+    for normalized_text, items in old_normalized_map.items():
+        # If this normalized text doesn't exist in new version, it's removed content
+        if normalized_text not in new_normalized_map:
+            # Only consider substantial removals
+            if len(normalized_text) > 50:  # Increased threshold for significance
+                for old_tag, old_text in items:
+                    results['removed'].append(f"<strong>{old_tag.upper()}</strong>: {old_text[:150]}..." if len(old_text) > 150 else f"<strong>{old_tag.upper()}</strong>: {old_text}")
+    
+    # For modified content, we need a much more sophisticated approach
+    # We'll only look at content that has similar normalized text (not identical)
+    # but with significant differences
+    
+    # Get all normalized texts for comparison
+    old_normalized_texts = set(old_normalized_map.keys())
+    new_normalized_texts = set(new_normalized_map.keys())
+    
+    # First find normalized texts that are similar but not identical
+    for new_norm in new_normalized_texts:
+        if new_norm in old_normalized_texts:
+            continue  # Skip exact matches
             
-        for new_tag, new_text in new_items:
-            aggressively_normalized_new = normalize_text(new_text)
-            
-            # If normalized versions are nearly identical, they're the same content
-            if difflib.SequenceMatcher(None, aggressively_normalized_old, aggressively_normalized_new).ratio() > 0.99:
-                best_similarity = 1.0
-                break
-                
-            similarity = difflib.SequenceMatcher(None, old_text.lower(), new_text.lower()).ratio()
-            best_similarity = max(best_similarity, similarity)
+        # Find best match in old content
+        best_old_norm = None
+        best_similarity = 0
         
-        if best_similarity < similarity_threshold:
-            results['removed'].append(f"<strong>{old_tag.upper()}</strong>: {old_text[:150]}..." if len(old_text) > 150 else f"<strong>{old_tag.upper()}</strong>: {old_text}")
+        for old_norm in old_normalized_texts:
+            # Skip very different lengths
+            length_ratio = min(len(new_norm), len(old_norm)) / max(len(new_norm), len(old_norm))
+            if length_ratio < 0.75:  # Only compare if lengths are within 25%
+                continue
+                
+            # Calculate similarity on normalized text
+            similarity = difflib.SequenceMatcher(None, new_norm, old_norm).ratio()
+            if similarity > best_similarity and similarity > 0.75:  # Higher threshold
+                best_similarity = similarity
+                best_old_norm = old_norm
+        
+        # Only consider significant modifications
+        if best_old_norm and best_similarity > 0.75 and best_similarity < 0.9:
+            # Extra verification: require significant word differences
+            for new_tag, new_text in new_normalized_map[new_norm]:
+                for old_tag, old_text in old_normalized_map[best_old_norm]:
+                    # Analyze actual words
+                    new_words = set(re.findall(r'\b\w+\b', new_text.lower()))
+                    old_words = set(re.findall(r'\b\w+\b', old_text.lower()))
+                    
+                    # Find unique words
+                    added_words = new_words - old_words
+                    removed_words = old_words - new_words
+                    
+                    # Require at least 5 word changes AND significant length difference
+                    word_changes = len(added_words) + len(removed_words)
+                    length_diff = abs(len(new_text) - len(old_text))
+                    
+                    if word_changes >= 5 and length_diff > 50:
+                        results['modified'].append({
+                            'old': f"<strong>{old_tag.upper()}</strong>: {old_text[:150]}..." if len(old_text) > 150 else f"<strong>{old_tag.upper()}</strong>: {old_text}",
+                            'new': f"<strong>{new_tag.upper()}</strong>: {new_text[:150]}..." if len(new_text) > 150 else f"<strong>{new_tag.upper()}</strong>: {new_text}"
+                        })
     
     return results
+
 def compare_pages(old_content, new_content):
     """
     Compares two HTML pages and identifies significant text changes.
