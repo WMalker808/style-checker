@@ -1,4 +1,3 @@
-#!/Users/max_walker/wayback/bin/python3
 import requests
 from bs4 import BeautifulSoup
 import difflib
@@ -84,11 +83,41 @@ def extract_meaningful_text(html_content):
     
     return content_items
 
+def normalize_text(text):
+    """
+    Enhanced text normalization to handle very subtle spacing differences
+    and focus only on meaningful content changes.
+    """
+    if not text:
+        return ""
+    
+    # Convert to lowercase for case-insensitive comparison
+    text = text.lower()
+    
+    # Replace multiple spaces, tabs, newlines with a single space
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove all spaces between word and punctuation
+    text = re.sub(r'(\w)\s+([,.;:!?])', r'\1\2', text)
+    
+    # Remove spaces after punctuation
+    text = re.sub(r'([,.;:!?])\s+', r'\1', text)
+    
+    # Completely remove commas for comparison (often cause false differences)
+    text = text.replace(',', '')
+    
+    # Remove periods as well (often differ between versions)
+    text = text.replace('.', '')
+    
+    # Trim leading/trailing whitespace
+    text = text.strip()
+    
+    return text
+
 def find_significant_changes(old_items, new_items, similarity_threshold=0.7):
     """
     Compare two lists of content items and identify significant additions, removals, and modifications.
-    Uses text similarity to determine if content has changed.
-    Returns a dictionary with categorized changes.
+    Now with much more aggressive filtering of minor formatting differences.
     """
     results = {
         'added': [],
@@ -101,37 +130,86 @@ def find_significant_changes(old_items, new_items, similarity_threshold=0.7):
         best_match = None
         best_similarity = 0
         
-        for old_tag, old_text in old_items:
-            # Calculate similarity ratio
-            similarity = difflib.SequenceMatcher(None, new_text, old_text).ratio()
+        # Check for substantive changes only
+        aggressively_normalized_new = normalize_text(new_text)
+        
+        # Skip very short content - likely to cause false positives
+        if len(aggressively_normalized_new) < 20:
+            continue
             
-            if similarity > best_similarity:
-                best_similarity = similarity
+        for old_tag, old_text in old_items:
+            aggressively_normalized_old = normalize_text(old_text)
+            
+            # If the aggressive normalization makes them very similar, ignore minor changes
+            normalized_similarity = difflib.SequenceMatcher(None, 
+                                                      aggressively_normalized_new, 
+                                                      aggressively_normalized_old).ratio()
+            
+            # For spacing issues, use an extremely high threshold (99%)
+            if normalized_similarity > 0.99:
+                # These are essentially the same text with minor spacing/punctuation differences
+                best_similarity = 1.0
+                best_match = (old_tag, old_text)
+                break
+            
+            # Calculate standard similarity for regular content changes
+            standard_similarity = difflib.SequenceMatcher(None, new_text.lower(), old_text.lower()).ratio()
+            
+            if standard_similarity > best_similarity:
+                best_similarity = standard_similarity
                 best_match = (old_tag, old_text)
         
-        # If no good match found, it's a new item
+        # Only consider as new content if nothing similar exists
         if best_similarity < similarity_threshold:
             results['added'].append(f"<strong>{new_tag.upper()}</strong>: {new_text[:150]}..." if len(new_text) > 150 else f"<strong>{new_tag.upper()}</strong>: {new_text}")
-        # If a similar but not identical match, it's a modification
+        
+        # For modified content, check if the changes are substantial (not just spacing/formatting)
         elif best_similarity < 0.95:
-            results['modified'].append({
-                'old': f"<strong>{best_match[0].upper()}</strong>: {best_match[1][:150]}..." if len(best_match[1]) > 150 else f"<strong>{best_match[0].upper()}</strong>: {best_match[1]}",
-                'new': f"<strong>{new_tag.upper()}</strong>: {new_text[:150]}..." if len(new_text) > 150 else f"<strong>{new_tag.upper()}</strong>: {new_text}"
-            })
+            # Check if normalized versions are still significantly different            
+            # Split into words and compare word count 
+            new_words = set(re.findall(r'\b\w+\b', new_text.lower()))
+            old_words = set(re.findall(r'\b\w+\b', best_match[1].lower()))
+            
+            # Find words that are unique to each version
+            added_words = new_words - old_words
+            removed_words = old_words - new_words
+            
+            # Only count as modified if there are actual word differences (not just formatting)
+            if len(added_words) > 1 or len(removed_words) > 1 or len(new_words) != len(old_words):
+                # Calculate length difference to detect substantial additions/removals
+                length_diff = abs(len(new_text) - len(best_match[1]))
+                
+                # If length difference is substantial (>20 characters) or different words found
+                if length_diff > 20 or len(added_words) > 1 or len(removed_words) > 1:
+                    results['modified'].append({
+                        'old': f"<strong>{best_match[0].upper()}</strong>: {best_match[1][:150]}..." if len(best_match[1]) > 150 else f"<strong>{best_match[0].upper()}</strong>: {best_match[1]}",
+                        'new': f"<strong>{new_tag.upper()}</strong>: {new_text[:150]}..." if len(new_text) > 150 else f"<strong>{new_tag.upper()}</strong>: {new_text}"
+                    })
     
     # Find removed content
     for old_tag, old_text in old_items:
         best_similarity = 0
+        aggressively_normalized_old = normalize_text(old_text)
         
+        # Skip very short content
+        if len(aggressively_normalized_old) < 20:
+            continue
+            
         for new_tag, new_text in new_items:
-            similarity = difflib.SequenceMatcher(None, old_text, new_text).ratio()
+            aggressively_normalized_new = normalize_text(new_text)
+            
+            # If normalized versions are nearly identical, they're the same content
+            if difflib.SequenceMatcher(None, aggressively_normalized_old, aggressively_normalized_new).ratio() > 0.99:
+                best_similarity = 1.0
+                break
+                
+            similarity = difflib.SequenceMatcher(None, old_text.lower(), new_text.lower()).ratio()
             best_similarity = max(best_similarity, similarity)
         
         if best_similarity < similarity_threshold:
             results['removed'].append(f"<strong>{old_tag.upper()}</strong>: {old_text[:150]}..." if len(old_text) > 150 else f"<strong>{old_tag.upper()}</strong>: {old_text}")
     
     return results
-
 def compare_pages(old_content, new_content):
     """
     Compares two HTML pages and identifies significant text changes.
